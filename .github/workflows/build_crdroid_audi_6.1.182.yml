@@ -143,8 +143,14 @@ jobs:
             sudo chmod +x /usr/bin/ccache
           fi
 
-          echo "正在克隆 crDroid 内核源码 (分支 ${{ env.KERNEL_SOURCE_BRANCH }})..."
+          echo "正在克隆 crDroid 内核主源码 (分支 ${{ env.KERNEL_SOURCE_BRANCH }})..."
           git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE_REPO }} common &
+
+          echo "正在克隆 crDroid 依赖的 sm8650-modules (分支 ${{ env.KERNEL_SOURCE_BRANCH }})..."
+          git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} https://github.com/crdroidandroid/android_kernel_oneplus_sm8650-modules.git sm8650-modules &
+
+          echo "正在克隆 crDroid 依赖的 sm8650-devicetrees (分支 ${{ env.KERNEL_SOURCE_BRANCH }})..."
+          git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} https://github.com/crdroidandroid/android_kernel_oneplus_sm8650-devicetrees.git sm8650-devicetrees &
 
           echo "正在下载 LLVM-Clang 20 (r547379) 工具链..."
           mkdir -p clang20
@@ -159,6 +165,9 @@ jobs:
 
           wait
           echo "源码与工具链初始化完成！"
+
+          echo "正在修复 drivers/iio/stm/imu/Kconfig 异常引用..."
+          sed -i '/st_asm330lhhx\/Kconfig/d' common/drivers/iio/stm/imu/Kconfig || true
 
           echo "正在清理 ABI 保护限制及 dirty 版本标记..."
           rm -f common/android/abi_gki_protected_exports_* || true
