@@ -98,6 +98,56 @@ def fix_zstd_level(path: str = "crypto/zstd.c") -> bool:
     return True
 
 
+def fix_susfs_fake_state(path: str = "security/selinux/hooks.c") -> bool:
+    """让 SUSFS 在 BakaSU/SukiSU 上也能链接。
+
+    SUSFS 主体补丁在 security/selinux/{hooks,selinuxfs}.c 中引用了
+    KernelSU 提供的 `fake_state`，但只有原版 KernelSU 的
+    10_enable_susfs_for_ksu.patch 才会定义它。BakaSU/SukiSU 已改用
+    ksu_security_context_to_sid() 等新 API，不再导出 fake_state，
+    导致 vmlinux 链接时报 undefined symbol: fake_state。
+
+    修法：把对 fake_state 的引用统一替换为内核自身的 selinux_state，
+    行为等价（都表示当前生效的 SELinux 状态），并去掉多余的 extern 声明。
+    """
+    changed = []
+    for p in (path, "security/selinux/selinuxfs.c"):
+        try:
+            with open(p) as f:
+                src = f.read()
+        except FileNotFoundError:
+            continue
+        if "fake_state" not in src:
+            continue
+        before = src
+        src = src.replace(
+            "#ifdef CONFIG_KSU_SUSFS\n"
+            "extern struct selinux_state fake_state;\n"
+            "extern bool ksu_selinux_hide_running __read_mostly;\n",
+            "#ifdef CONFIG_KSU_SUSFS\n"
+            "extern bool ksu_selinux_hide_running __read_mostly;\n",
+        )
+        src = src.replace(
+            "#ifdef CONFIG_KSU_SUSFS\n"
+            "extern struct selinux_state fake_state;\n"
+            "extern struct page *fake_status;\n",
+            "#ifdef CONFIG_KSU_SUSFS\n"
+            "extern struct page *fake_status;\n",
+        )
+        src = src.replace("&fake_state", "&selinux_state")
+        src = src.replace("extern struct selinux_state fake_state;\n", "")
+        if src != before:
+            with open(p, "w") as f:
+                f.write(src)
+            changed.append(p)
+
+    if changed:
+        print("已将 fake_state 引用替换为 selinux_state: " + ", ".join(changed))
+    else:
+        print("未发现需要处理的 fake_state 引用")
+    return True
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -107,6 +157,8 @@ def main() -> int:
         return 0 if fix_susfs_namespace() else 1
     if action == "zstd-level":
         return 0 if fix_zstd_level() else 1
+    if action == "susfs-fake-state":
+        return 0 if fix_susfs_fake_state() else 1
     print(f"未知操作: {action}", file=sys.stderr)
     return 2
 

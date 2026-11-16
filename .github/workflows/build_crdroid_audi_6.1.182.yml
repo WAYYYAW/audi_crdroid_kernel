@@ -322,6 +322,11 @@ jobs:
               cd ./KernelSU
               [ -f "10_enable_susfs_for_ksu.patch" ] && patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch || true
               cd ..
+            else
+              # BakaSU / SukiSU / KernelSU-Next 不再导出 fake_state，
+              # 而 SUSFS 主体补丁仍引用它，会链接失败 (undefined symbol: fake_state)。
+              # 统一改指内核自身的 selinux_state。
+              python3 "${{ github.workspace }}/scripts/fix_patches.py" susfs-fake-state
             fi
 
             echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
