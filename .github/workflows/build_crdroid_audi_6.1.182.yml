@@ -326,7 +326,12 @@ jobs:
               # BakaSU / SukiSU / KernelSU-Next 不再导出 fake_state，
               # 而 SUSFS 主体补丁仍引用它，会链接失败 (undefined symbol: fake_state)。
               # 统一改指内核自身的 selinux_state。
-              python3 "${{ github.workspace }}/scripts/fix_patches.py" susfs-fake-state
+              ( cd common && python3 "${{ github.workspace }}/scripts/fix_patches.py" susfs-fake-state )
+              # 硬校验：仍残留 fake_state 引用就立即失败，避免拖到链接期才发现
+              if grep -rn 'fake_state' common/security/selinux/hooks.c common/security/selinux/selinuxfs.c 2>/dev/null; then
+                echo "::error::SUSFS 仍引用未定义的 fake_state，请检查修复脚本"
+                exit 1
+              fi
             fi
 
             echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
