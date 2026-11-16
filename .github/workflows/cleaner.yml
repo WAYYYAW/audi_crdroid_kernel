@@ -1,0 +1,20 @@
+name: 清理历史工作流运行记录与缓存
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0' # 每周日午夜自动执行
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: 删除多余运行记录
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 14
+          keep_minimum_runs: 3
