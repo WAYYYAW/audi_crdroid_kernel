@@ -286,8 +286,33 @@ jobs:
               cp -f ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/ || true
               cp -rf ./susfs4ksu/kernel_patches/fs/* ./common/fs/ || true
               cp -rf ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/ || true
+              SUSFS_PATCH="50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
               cd ./common
-              [ -f "50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" ] && patch -p1 -F 3 < "50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" || true
+              if [ -f "$SUSFS_PATCH" ]; then
+                # 先尝试正常应用（允许 fuzz），并记录结果
+                set +e
+                patch -p1 -F 3 < "$SUSFS_PATCH"
+                SUSFS_RC=$?
+                set -e
+                if [ "$SUSFS_RC" -ne 0 ]; then
+                  echo "::warning::SUSFS 补丁未完全应用 (rc=$SUSFS_RC)，执行 fs/namespace.c 定向修复"
+                  # 本内核在 #include "internal.h" 后多了一行 trace/hooks/blk.h，
+                  # 导致 fs/namespace.c 第 1 个 hunk 整体失配。由脚本补齐该 hunk 全部内容。
+                  python3 "${{ github.workspace }}/scripts/fix_patches.py" susfs-namespace
+                  set +e
+                  patch -p1 -N -F 3 < "$SUSFS_PATCH"
+                  set -e
+                fi
+                find . -name '*.rej' -delete
+                # 严格校验：关键符号必须就位，不再静默带病编译
+                for sym in 'linux/susfs_def.h' '#define CL_COPY_MNT_NS ' 'susfs_is_sdcard_android_data_not_decrypted'; do
+                  if ! grep -q -- "$sym" fs/namespace.c; then
+                    echo "::error::SUSFS 补丁应用失败：fs/namespace.c 缺少 $sym"
+                    exit 1
+                  fi
+                done
+                echo "SUSFS 补丁校验通过"
+              fi
               if [ -f "${{ github.workspace }}/other_patch/69_hide_stuff.patch" ]; then
                 patch -p1 -N -F 3 < "${{ github.workspace }}/other_patch/69_hide_stuff.patch" || true
               fi
@@ -329,9 +354,32 @@ jobs:
             cp -f "${{ github.workspace }}/zram_patch/lz4armv8.S" ./lib/
           fi
           if [ -f "${{ github.workspace }}/zram_patch/002-zstd.patch" ]; then
-            patch -p1 -F 3 < "${{ github.workspace }}/zram_patch/002-zstd.patch" || true
+            ZSTD_PATCH="${{ github.workspace }}/zram_patch/002-zstd.patch"
+            # ZSTD 1.5.7 是整库升级补丁（内核自带 1.4.10 -> 1.5.7），必须整体干净应用。
+            # 部分应用会得到半新半旧的 lib/zstd，且 crypto/zstd.c 会引用 1.5.7 才有的
+            # 字段，必然编译失败。因此先 dry-run，失败就整体放弃升级并回滚。
+            if patch -p1 --dry-run -F 0 < "$ZSTD_PATCH" > /tmp/zstd-dryrun.log 2>&1; then
+              echo "ZSTD 补丁可完整应用，开始应用"
+              patch -p1 -F 0 < "$ZSTD_PATCH"
+            else
+              echo "::warning::ZSTD 1.5.7 补丁无法完整应用，放弃整库升级（保持内核自带 zstd 1.4.10）"
+              echo "--- dry-run 失败摘要 ---"
+              grep -E "FAILED|ignored|^Hunk" /tmp/zstd-dryrun.log | head -20 || true
+              # 由于 dry-run 失败时不落盘，这里无需回滚。
+            fi
+            find . -name '*.rej' -delete
+            # 兜底校验：任何情况下 crypto/zstd.c 都不能引用未定义的 compression_level
+            if grep -q 'compression_level' crypto/zstd.c && \
+               ! grep -q '__read_mostly compression_level' crypto/zstd.c; then
+              echo "::warning::crypto/zstd.c 引用了 compression_level 但未定义，注入定义"
+              python3 "${{ github.workspace }}/scripts/fix_patches.py" zstd-level || true
+            fi
+            if grep -q 'compression_level' crypto/zstd.c && \
+               ! grep -q '__read_mostly compression_level' crypto/zstd.c; then
+              echo "::error::crypto/zstd.c 引用 compression_level 但无法补齐定义"
+              exit 1
+            fi
           fi
-
       - name: 应用 LZ4KD 补丁 (按需)
         if: inputs.lz4kd_enable
         run: |
