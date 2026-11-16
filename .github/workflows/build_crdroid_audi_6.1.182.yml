@@ -289,7 +289,8 @@ jobs:
               SUSFS_PATCH="50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
               cd ./common
               if [ -f "$SUSFS_PATCH" ]; then
-                # 先尝试正常应用（允许 fuzz），并记录结果
+                # 只应用一次补丁：失败时不要重试整份补丁，否则 patch 的
+                # "已应用检测" 会因文件被改动而失效，造成 hunk 重复应用。
                 set +e
                 patch -p1 -F 3 < "$SUSFS_PATCH"
                 SUSFS_RC=$?
@@ -297,11 +298,9 @@ jobs:
                 if [ "$SUSFS_RC" -ne 0 ]; then
                   echo "::warning::SUSFS 补丁未完全应用 (rc=$SUSFS_RC)，执行 fs/namespace.c 定向修复"
                   # 本内核在 #include "internal.h" 后多了一行 trace/hooks/blk.h，
-                  # 导致 fs/namespace.c 第 1 个 hunk 整体失配。由脚本补齐该 hunk 全部内容。
+                  # 使 fs/namespace.c 第 1 个 hunk（susfs_def.h + extern + CL_COPY_MNT_NS）
+                  # 整体失配。脚本只补齐这一块，不重复应用其余 hunk。
                   python3 "${{ github.workspace }}/scripts/fix_patches.py" susfs-namespace
-                  set +e
-                  patch -p1 -N -F 3 < "$SUSFS_PATCH"
-                  set -e
                 fi
                 find . -name '*.rej' -delete
                 # 严格校验：关键符号必须就位，不再静默带病编译
